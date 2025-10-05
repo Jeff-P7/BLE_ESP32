@@ -1,101 +1,250 @@
-import React, { useEffect, useState } from 'react';
-import { View, Text, FlatList, PermissionsAndroid, Platform, Button } from 'react-native';
-import { BleManager, Device } from 'react-native-ble-plx';
-
-let manager: BleManager | null = null;
-try {
-  manager = new BleManager();
-} catch (error) {
-  console.warn('BLE Manager not available:', error);
-}
+import React, { useState, useMemo } from 'react';
+import { View, Text, FlatList, StyleSheet, StatusBar } from 'react-native';
+import { useBLE } from './hooks/useBLE';
+import DeviceCard from './components/DeviceCard';
+import ScanControls from './components/ScanControls';
+import ErrorBanner from './components/ErrorBanner';
+import { BLEDeviceInfo, ESP32DeviceType, BLEScanState } from './types/ble';
+import { UI_CONFIG, ESP32_CONFIG } from './constants/ble';
 
 export default function App() {
-  const [devices, setDevices] = useState<Device[]>([]);
-  const [scanning, setScanning] = useState(false);
+  const {
+    scanState,
+    devices,
+    error,
+    isBluetoothEnabled,
+    startScan,
+    stopScan,
+    clearDevices,
+    isESP32Device,
+    filterDevices,
+  } = useBLE();
 
-  // Ask for Android permissions
-  function requestPermissions() {
-    if (Platform.OS === 'android') {
-      PermissionsAndroid.requestMultiple([
-        PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
-        PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
-        PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
-      ]).catch(console.error);
-    }
-  }
+  const [showESP32Only, setShowESP32Only] = useState(false);
+  const [dismissedError, setDismissedError] = useState<string | null>(null);
 
-  useEffect(() => {
-    requestPermissions();
-    return () => {
-      if (manager) {
-        manager.destroy();
-      }
-    };
-  }, []);
+  // Filter and sort devices
+  const filteredDevices = useMemo(() => {
+    let filtered = devices;
 
-  const startScan = () => {
-    if (!manager) {
-      console.warn('BLE Manager not available - running in Expo Go?');
-      return;
+    // Apply ESP32 filter if enabled
+    if (showESP32Only) {
+      filtered = devices.filter(device => 
+        isESP32Device(device) !== ESP32DeviceType.UNKNOWN
+      );
     }
 
-    setDevices([]);
-    setScanning(true);
-    manager.startDeviceScan(null, null, (error, device) => {
-      if (error) {
-        console.warn(error);
-        setScanning(false);
-        return;
+    // Sort by RSSI (stronger signals first) and then by name
+    return filtered.sort((a, b) => {
+      if (a.rssi && b.rssi) {
+        return b.rssi - a.rssi; // Higher RSSI first
       }
-
-      if (device && !devices.find((d) => d.id === device.id)) {
-        setDevices((prev) => [...prev, device]);
-      }
+      if (a.rssi && !b.rssi) return -1;
+      if (!a.rssi && b.rssi) return 1;
+      
+      const nameA = a.name || '';
+      const nameB = b.name || '';
+      return nameA.localeCompare(nameB);
     });
+  }, [devices, showESP32Only, isESP32Device]);
 
-    // Stop after 10 seconds
-    setTimeout(() => {
-      if (manager) {
-        manager.stopDeviceScan();
-      }
-      setScanning(false);
-    }, 10000);
+  // Count ESP32 devices
+  const esp32Count = useMemo(() => 
+    devices.filter(device => 
+      isESP32Device(device) !== ESP32DeviceType.UNKNOWN
+    ).length,
+    [devices, isESP32Device]
+  );
+
+  const handleDevicePress = (device: BLEDeviceInfo) => {
+    console.log('Device pressed:', device);
+    // TODO: Implement device connection logic
   };
 
-  if (!manager) {
+  const handleDismissError = () => {
+    setDismissedError(error);
+  };
+
+  // Show BLE unavailable screen
+  if (scanState === BLEScanState.ERROR && !isBluetoothEnabled) {
     return (
-      <View style={{ flex: 1, padding: 20, paddingTop: 60, justifyContent: 'center', alignItems: 'center' }}>
-        <Text style={{ fontSize: 18, fontWeight: 'bold', marginBottom: 20, textAlign: 'center' }}>
-          BLE ESP32 App
-        </Text>
-        <Text style={{ fontSize: 16, color: '#666', textAlign: 'center', marginBottom: 20 }}>
-          BLE Manager not available
-        </Text>
-        <Text style={{ fontSize: 14, color: '#888', textAlign: 'center' }}>
-          This app requires native BLE support.{'\n'}
-          Create a development build to use BLE scanning features.
-        </Text>
+      <View style={styles.unavailableContainer}>
+        <StatusBar barStyle="dark-content" backgroundColor={UI_CONFIG.COLORS.background} />
+        <View style={styles.unavailableContent}>
+          <Text style={styles.title}>BLE ESP32 Scanner</Text>
+          <Text style={styles.subtitle}>Bluetooth Low Energy not available</Text>
+          <Text style={styles.description}>
+            This app requires native BLE support.{'\n'}
+            Create a development build to use BLE scanning features.
+          </Text>
+        </View>
       </View>
     );
   }
 
   return (
-    <View style={{ flex: 1, padding: 20, paddingTop: 60 }}>
-      <Text style={{ fontSize: 18, fontWeight: 'bold', marginBottom: 20 }}>BLE ESP32</Text>
-      <Button title={scanning ? "Scanning..." : "Start Scan"} onPress={startScan} disabled={scanning} />
+    <View style={styles.container}>
+      <StatusBar barStyle="dark-content" backgroundColor={UI_CONFIG.COLORS.background} />
+      
+      {/* Header */}
+      <View style={styles.header}>
+        <Text style={styles.headerTitle}>BLE ESP32 Scanner</Text>
+        <Text style={styles.headerSubtitle}>
+          {filteredDevices.length} device{filteredDevices.length === 1 ? '' : 's'} found
+          {esp32Count > 0 && ` • ${esp32Count} ESP32`}
+        </Text>
+      </View>
 
+      {/* Error Banner */}
+      {error && error !== dismissedError && (
+        <ErrorBanner 
+          message={error} 
+          onDismiss={handleDismissError}
+          type={scanState === BLEScanState.PERMISSION_DENIED ? 'warning' : 'error'}
+        />
+      )}
+
+      {/* Scan Controls */}
+      <ScanControls
+        scanState={scanState}
+        onStartScan={startScan}
+        onStopScan={stopScan}
+        onClearDevices={clearDevices}
+        deviceCount={devices.length}
+        isBluetoothEnabled={isBluetoothEnabled}
+      />
+
+      {/* ESP32 Filter Toggle */}
+      {devices.length > 0 && (
+        <View style={styles.filterContainer}>
+          <Text 
+            style={[styles.filterToggle, showESP32Only && styles.filterToggleActive]}
+            onPress={() => setShowESP32Only(!showESP32Only)}
+          >
+            {showESP32Only ? 'Show All Devices' : `Show ESP32 Only (${esp32Count})`}
+          </Text>
+        </View>
+      )}
+
+      {/* Device List */}
       <FlatList
-        data={devices}
-        keyExtractor={(item, index) => `${item.id}-${index}`}
+        data={filteredDevices}
+        keyExtractor={(item) => item.id}
         renderItem={({ item }) => (
-          <View style={{ paddingVertical: 8, borderBottomWidth: 1, borderColor: '#ccc' }}>
-            <Text style={{ fontWeight: 'bold' }}>{item.name || 'Unnamed Device'}</Text>
-            <Text>ID: {item.id}</Text>
-            <Text>RSSI: {item.rssi}</Text>
-          </View>
+          <DeviceCard
+            device={item}
+            onPress={handleDevicePress}
+            esp32Type={isESP32Device(item)}
+          />
         )}
-        style={{ marginTop: 20 }}
+        contentContainerStyle={styles.listContainer}
+        showsVerticalScrollIndicator={false}
+        ListEmptyComponent={
+          <View style={styles.emptyContainer}>
+            <Text style={styles.emptyTitle}>
+              {showESP32Only ? 'No ESP32 devices found' : 'No devices found'}
+            </Text>
+            <Text style={styles.emptySubtitle}>
+              {scanState === BLEScanState.SCANNING 
+                ? 'Keep scanning...' 
+                : 'Tap "Start Scan" to discover nearby devices'
+              }
+            </Text>
+          </View>
+        }
       />
     </View>
   );
 }
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: UI_CONFIG.COLORS.background,
+  },
+  unavailableContainer: {
+    flex: 1,
+    backgroundColor: UI_CONFIG.COLORS.background,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: UI_CONFIG.SPACING.lg,
+  },
+  unavailableContent: {
+    alignItems: 'center',
+  },
+  title: {
+    fontSize: UI_CONFIG.FONT_SIZES.xxl,
+    fontWeight: 'bold',
+    color: UI_CONFIG.COLORS.text,
+    marginBottom: UI_CONFIG.SPACING.md,
+    textAlign: 'center',
+  },
+  subtitle: {
+    fontSize: UI_CONFIG.FONT_SIZES.lg,
+    color: UI_CONFIG.COLORS.error,
+    marginBottom: UI_CONFIG.SPACING.lg,
+    textAlign: 'center',
+  },
+  description: {
+    fontSize: UI_CONFIG.FONT_SIZES.md,
+    color: UI_CONFIG.COLORS.textSecondary,
+    textAlign: 'center',
+    lineHeight: 24,
+  },
+  header: {
+    backgroundColor: UI_CONFIG.COLORS.surface,
+    paddingTop: UI_CONFIG.SPACING.xl,
+    paddingBottom: UI_CONFIG.SPACING.md,
+    paddingHorizontal: UI_CONFIG.SPACING.md,
+    borderBottomWidth: 1,
+    borderBottomColor: UI_CONFIG.COLORS.border,
+  },
+  headerTitle: {
+    fontSize: UI_CONFIG.FONT_SIZES.xxl,
+    fontWeight: 'bold',
+    color: UI_CONFIG.COLORS.text,
+    marginBottom: UI_CONFIG.SPACING.xs,
+  },
+  headerSubtitle: {
+    fontSize: UI_CONFIG.FONT_SIZES.sm,
+    color: UI_CONFIG.COLORS.textSecondary,
+  },
+  filterContainer: {
+    paddingHorizontal: UI_CONFIG.SPACING.md,
+    paddingVertical: UI_CONFIG.SPACING.sm,
+    alignItems: 'center',
+  },
+  filterToggle: {
+    fontSize: UI_CONFIG.FONT_SIZES.sm,
+    color: UI_CONFIG.COLORS.primary,
+    fontWeight: '500',
+    textDecorationLine: 'underline',
+  },
+  filterToggleActive: {
+    color: UI_CONFIG.COLORS.secondary,
+    fontWeight: 'bold',
+  },
+  listContainer: {
+    paddingBottom: UI_CONFIG.SPACING.lg,
+  },
+  emptyContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingVertical: UI_CONFIG.SPACING.xxl,
+    paddingHorizontal: UI_CONFIG.SPACING.lg,
+  },
+  emptyTitle: {
+    fontSize: UI_CONFIG.FONT_SIZES.lg,
+    fontWeight: 'bold',
+    color: UI_CONFIG.COLORS.text,
+    marginBottom: UI_CONFIG.SPACING.sm,
+    textAlign: 'center',
+  },
+  emptySubtitle: {
+    fontSize: UI_CONFIG.FONT_SIZES.md,
+    color: UI_CONFIG.COLORS.textSecondary,
+    textAlign: 'center',
+    lineHeight: 22,
+  },
+});

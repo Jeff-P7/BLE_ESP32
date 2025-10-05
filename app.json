@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "BLE_ESP32",
-    "slug": "BLE_ESP32",
+    "slug": "BLE_Scanner",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -39,6 +39,7 @@
       "eas": {
         "projectId": "dd0cb7fe-94fc-40f8-8163-f895f838787d"
       }
-    }
+    },
+    "owner": "jeffreyp7"
   }
 }
